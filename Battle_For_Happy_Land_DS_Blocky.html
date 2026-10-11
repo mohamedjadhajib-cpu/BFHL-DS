@@ -1,0 +1,3125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<title>Battle For Happy Land DS</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #111;
+}
+
+body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#game {
+    width: min(100vw, 1280px);
+    height: min(100vh, 720px);
+    display: block;
+    background: #000;
+
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="game" width="960" height="540"></canvas>
+
+<script>
+
+"use strict";
+
+
+/* =========================================================
+   CANVAS
+========================================================= */
+
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+ctx.imageSmoothingEnabled = false;
+
+
+/* =========================================================
+   ASSETS
+========================================================= */
+
+const assets = {};
+
+const imageFiles = {
+
+    bg: "balancebeamlevelbg.png",
+
+    water: "waterthatsunderthebalancebeam.png",
+
+    beam: "balancebeam.png",
+
+    pcIdle: "PCidle.png",
+    pcJump: "PCjump.png",
+
+    pcWalk1: "PCwalkCycle1.png",
+    pcWalk2: "PCwalkCycle2.png",
+    pcWalk3: "PCwalkCycle3.png",
+    pcWalk4: "PCwalkCycle4.png",
+    pcWalk5: "PCwalkCycle5.png",
+
+    pcPush1: "PCpush01.png",
+    pcPush2: "PCpush02.png",
+    pcFall: "pcFall.png",
+
+    woodyIdle: "woodyIdle.png",
+
+    woodyWalk1: "woodywalkCycle1.png",
+    woodyWalk2: "woodywalkCycle2.png",
+    woodyWalk3: "woodywalkCycle3.png",
+    woodyWalk4: "woodywalkCycle4.png",
+
+    woodyJump: "woodyjump.png",
+    woodyFall: "woodyFall.png",
+
+    blockyIdle: "blockyIdle.png",
+    blockyJump: "blockyJump.png",
+    blockyWalk1: "blockyWalkCycle1.png",
+    blockyWalk2: "blockyWalkCycle2.png",
+    blockyWalk3: "blockyWalkCycle3.png",
+    blockyWalk4: "blockyWalkCycle4.png",
+    blockyPush: "blockyPush.png",
+    blockyFall: "blockyFall.png"
+};
+
+
+function loadImage(name, file) {
+
+    const img = new Image();
+
+    img.src = file;
+
+    assets[name] = img;
+}
+
+
+for (
+    const [name, file]
+    of Object.entries(imageFiles)
+) {
+    loadImage(name, file);
+}
+
+
+/* =========================================================
+   MUSIC
+========================================================= */
+
+const music = new Audio("rocket.mp3");
+
+music.loop = true;
+music.volume = 0.45;
+
+let musicStarted = false;
+
+
+function startMusic() {
+
+    if (musicStarted)
+        return;
+
+    music.play().then(() => {
+
+        musicStarted = true;
+
+    }).catch(() => {});
+
+}
+
+
+/* =========================================================
+   BITMAP FONT
+
+   Small letters:  fonts/A.png  fonts/B.png  ...  fonts/Z.png
+   Big letters:    fonts/BigA.png  fonts/BigB.png  ...  fonts/BigZ.png
+
+   Letters are drawn at the size of their image (times the scale
+   below). If a letter image is missing, a plain letter is drawn
+   in its place until the file exists.
+========================================================= */
+
+const FONT_DIR = "fonts/";
+
+/* Add "0123456789" once 0.png ... 9.png (and Big0.png ... Big9.png) exist. */
+const FONT_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+const FONT_SCALE_SMALL = 1;
+
+const FONT_SCALE_BIG = 1;
+
+const FONT_SPACING = 2;
+
+
+function loadFontSet(prefix) {
+
+    const set = {};
+
+    for (const ch of FONT_CHARS) {
+
+        const img = new Image();
+
+        img.src = FONT_DIR + prefix + ch + ".png";
+
+        set[ch] = img;
+    }
+
+    return set;
+}
+
+
+const font = {
+
+    small: loadFontSet(""),
+
+    big: loadFontSet("Big")
+};
+
+
+function glyphImage(ch, big) {
+
+    const img = (big ? font.big : font.small)[ch];
+
+    if (
+        img &&
+        img.complete &&
+        img.naturalWidth > 0
+    ) {
+        return img;
+    }
+
+    return null;
+}
+
+
+function fontHeight(big) {
+
+    const img = glyphImage("A", big);
+
+    if (img) {
+        return img.naturalHeight;
+    }
+
+    return big ? 48 : 28;
+}
+
+
+function textHeight(big) {
+
+    return Math.round(
+        fontHeight(big) *
+        (big ? FONT_SCALE_BIG : FONT_SCALE_SMALL)
+    );
+}
+
+
+function glyphAdvance(ch, big, scale) {
+
+    if (ch === " ") {
+        return fontHeight(big) * 0.5 * scale;
+    }
+
+    const img = glyphImage(ch, big);
+
+    if (img) {
+        return (
+            img.naturalWidth * scale +
+            FONT_SPACING * scale
+        );
+    }
+
+    return (
+        fontHeight(big) * 0.6 * scale +
+        FONT_SPACING * scale
+    );
+}
+
+
+function measureText(text, big, scale) {
+
+    let width = 0;
+
+    for (const ch of text) {
+        width += glyphAdvance(ch, big, scale);
+    }
+
+    return Math.max(0, width - FONT_SPACING * scale);
+}
+
+
+function drawFallbackGlyph(ch, x, y, width, height) {
+
+    ctx.save();
+
+    ctx.font =
+        "bold " +
+        Math.round(height * 0.85) +
+        "px monospace";
+
+    ctx.textAlign = "center";
+
+    ctx.textBaseline = "top";
+
+    ctx.lineJoin = "round";
+
+    ctx.lineWidth = Math.max(2, height * 0.14);
+
+    ctx.strokeStyle = "#000";
+
+    ctx.fillStyle = "#fff";
+
+    ctx.strokeText(ch, x + width / 2, y);
+
+    ctx.fillText(ch, x + width / 2, y);
+
+    ctx.restore();
+}
+
+
+/*
+   options: { big, align: "left" | "center" | "right", maxWidth }
+   Text is shrunk to fit if it is wider than maxWidth.
+   Returns { width, height } of what was drawn.
+*/
+
+function drawFontText(text, x, y, options) {
+
+    const big = !!(options && options.big);
+
+    const align = (options && options.align) || "left";
+
+    const maxWidth = (options && options.maxWidth) || Infinity;
+
+    text = String(text).toUpperCase();
+
+
+    let scale = big ? FONT_SCALE_BIG : FONT_SCALE_SMALL;
+
+    let width = measureText(text, big, scale);
+
+
+    if (width > maxWidth) {
+
+        scale *= maxWidth / width;
+
+        width = measureText(text, big, scale);
+    }
+
+
+    const height = fontHeight(big) * scale;
+
+    let cursor = x;
+
+    if (align === "center") {
+        cursor = x - width / 2;
+    } else if (align === "right") {
+        cursor = x - width;
+    }
+
+
+    for (const ch of text) {
+
+        const advance = glyphAdvance(ch, big, scale);
+
+        if (ch !== " ") {
+
+            const img = glyphImage(ch, big);
+
+            if (img) {
+
+                ctx.drawImage(
+
+                    img,
+
+                    Math.round(cursor),
+                    Math.round(y),
+
+                    Math.round(img.naturalWidth * scale),
+                    Math.round(img.naturalHeight * scale)
+                );
+
+            } else {
+
+                drawFallbackGlyph(
+                    ch,
+                    cursor,
+                    y,
+                    advance - FONT_SPACING * scale,
+                    height
+                );
+            }
+        }
+
+        cursor += advance;
+    }
+
+    return { width: width, height: height };
+}
+
+
+/* =========================================================
+   CONTROLS
+========================================================= */
+
+const keys = {};
+
+let jumpPressed = false;
+
+let aPressed = false;
+
+
+window.addEventListener("keydown", event => {
+
+    const key = event.key.toLowerCase();
+
+
+    startMusic();
+
+
+    /*
+       PAUSE: the 0 key (top row or numpad).
+       event.code is checked so it also works on AZERTY keyboards,
+       where the top-row 0 key types "à" unless Shift is held.
+    */
+
+    if (
+        event.code === "Digit0" ||
+        event.code === "Numpad0" ||
+        key === "0"
+    ) {
+
+        event.preventDefault();
+
+        if (!event.repeat) {
+            togglePause();
+        }
+
+        return;
+    }
+
+
+    /*
+       MENUS (level select, pause, level complete):
+       Up / Down (or Z / W / S) to move, Enter or Space to choose.
+    */
+
+    if (gameState !== "playing") {
+
+        if (
+            key === "arrowup" ||
+            key === "arrowdown" ||
+            key === "enter" ||
+            key === " " ||
+            key === "z" ||
+            key === "w" ||
+            key === "s"
+        ) {
+
+            event.preventDefault();
+
+            if (!event.repeat) {
+                handleMenuKey(key);
+            }
+        }
+
+        keys[key] = true;
+
+        return;
+    }
+
+
+    /*
+       A only registers once per press.
+    */
+
+    if (key === "a" && !keys["a"]) {
+        aPressed = true;
+    }
+
+    keys[key] = true;
+
+
+    if (
+        key === " " ||
+        key === "space"
+    ) {
+
+        jumpPressed = true;
+
+        event.preventDefault();
+    }
+
+
+    if (
+        key === "arrowleft" ||
+        key === "arrowright" ||
+        key === "q" ||
+        key === "d" ||
+        key === "a"
+    ) {
+
+        event.preventDefault();
+    }
+
+});
+
+
+window.addEventListener("keyup", event => {
+
+    const key = event.key.toLowerCase();
+
+    keys[key] = false;
+
+});
+
+
+/* =========================================================
+   WORLD
+========================================================= */
+
+let WORLD_WIDTH = 5000;
+
+let cameraX = 0;
+
+const gravity = 1700;
+
+
+/* =========================================================
+   BALANCE BEAM
+========================================================= */
+
+const beam = {
+
+    x: 100,
+
+    y: 370,
+
+    width: 2800,
+
+    height: 70
+};
+
+
+/* =========================================================
+   WATER
+========================================================= */
+
+const water = {
+
+    x: 0,
+
+    y: 440,
+
+    width: WORLD_WIDTH,
+
+    height: 300
+};
+
+
+/* =========================================================
+   PC
+========================================================= */
+
+const player = {
+
+    x: 150,
+
+    y: 0,
+
+    width: 64,
+
+    height: 80,
+
+    vx: 0,
+
+    vy: 0,
+
+    speed: 340,
+
+    acceleration: 1900,
+
+    friction: 2400,
+
+    jumpPower: 820,
+
+    grounded: false,
+
+    facing: 1,
+
+    animationTimer: 0,
+
+    walkFrame: 0,
+
+    pushing: false,
+
+    pushTimer: 0,
+
+    blockPushes: 0,
+
+    knockbackCooldown: 0,
+
+    jumpCount: 0
+};
+
+
+/* =========================================================
+   WOODY
+========================================================= */
+
+const woody = {
+
+    x: 900,
+
+    y: 0,
+
+    width: 64,
+
+    height: 80,
+
+    vx: 0,
+
+    vy: 0,
+
+    grounded: false,
+
+    facing: -1,
+
+    animationTimer: 0,
+
+    walkFrame: 0,
+
+    state: "walking",
+
+    stateTimer: 0,
+
+    aiTimer: 0,
+
+    fear: 0,
+
+    hits: 0,
+
+    blockHits: 0,
+
+    hitTimer: 0,
+
+    fallen: false,
+
+    fallTimer: 0,
+
+    edgeWarning: false,
+
+    beamCollision: true,
+
+    active: true,
+
+    speedScale: 1
+};
+
+
+/* =========================================================
+   BLOCKY
+========================================================= */
+
+const blocky = {
+
+    x: 1450,
+    y: 0,
+
+    width: 72,
+    height: 80,
+
+    vx: 0,
+    vy: 0,
+
+    grounded: false,
+    facing: -1,
+
+    animationTimer: 0,
+    walkFrame: 0,
+
+    hits: 0,
+    hitTimer: 0,
+
+    attackTimer: 0,
+    attackCooldown: 0,
+
+    target: "player",
+
+    fallen: false,
+    fallTimer: 0,
+
+    beamCollision: true,
+
+    active: true,
+
+    chaseSpeed: 190,
+
+    cooldownTime: 0.85
+};
+
+
+const blockyWalkFrames = [
+    "blockyWalk1",
+    "blockyWalk2",
+    "blockyWalk3",
+    "blockyWalk4"
+];
+
+
+/* =========================================================
+   PC FALL
+========================================================= */
+
+let playerFallen = false;
+
+let playerFallTimer = 0;
+
+
+/* =========================================================
+   WALK FRAMES
+========================================================= */
+
+const pcWalkFrames = [
+
+    "pcWalk1",
+    "pcWalk2",
+    "pcWalk3",
+    "pcWalk4",
+    "pcWalk5"
+
+];
+
+
+const woodyWalkFrames = [
+
+    "woodyWalk1",
+    "woodyWalk2",
+    "woodyWalk3",
+    "woodyWalk4"
+
+];
+
+
+/* =========================================================
+   SPRITES
+========================================================= */
+
+function getPCSprite() {
+
+    if (playerFallen) {
+        return assets.pcFall;
+    }
+
+    if (player.pushing) {
+
+        if (gameState === "playing") {
+            player.pushTimer++;
+        }
+
+        if (
+            Math.floor(
+                player.pushTimer / 8
+            ) % 2 === 0
+        ) {
+
+            return assets.pcPush1;
+
+        }
+
+        return assets.pcPush2;
+    }
+
+
+    if (!player.grounded) {
+
+        return assets.pcJump;
+
+    }
+
+
+    if (Math.abs(player.vx) > 30) {
+
+        return assets[
+            pcWalkFrames[player.walkFrame]
+        ];
+
+    }
+
+
+    return assets.pcIdle;
+}
+
+
+function getWoodySprite() {
+
+    if (woody.fallen) {
+
+        return assets.woodyFall;
+
+    }
+
+
+    if (!woody.grounded) {
+
+        return assets.woodyJump;
+
+    }
+
+
+    if (Math.abs(woody.vx) > 20) {
+
+        return assets[
+            woodyWalkFrames[woody.walkFrame]
+        ];
+
+    }
+
+
+    return assets.woodyIdle;
+}
+
+
+function getBlockySprite() {
+
+    if (blocky.fallen) {
+        return assets.blockyFall;
+    }
+
+    if (blocky.attackTimer > 0) {
+        return assets.blockyPush;
+    }
+
+    if (!blocky.grounded) {
+        return assets.blockyJump;
+    }
+
+    if (Math.abs(blocky.vx) > 20) {
+        return assets[
+            blockyWalkFrames[blocky.walkFrame]
+        ];
+    }
+
+    return assets.blockyIdle;
+}
+
+
+/* =========================================================
+   BEAM COLLISION
+========================================================= */
+
+function checkBeamLanding(obj, dt) {
+
+    if (
+        obj === woody &&
+        !woody.beamCollision
+    ) {
+        obj.grounded = false;
+        return false;
+    }
+
+    if (
+        obj === blocky &&
+        !blocky.beamCollision
+    ) {
+        obj.grounded = false;
+        return false;
+    }
+
+
+    const previousBottom =
+        obj.y +
+        obj.height -
+        obj.vy * dt;
+
+
+    const currentBottom =
+        obj.y +
+        obj.height;
+
+
+    const beamLeft =
+        beam.x;
+
+
+    const beamRight =
+        beam.x +
+        beam.width;
+
+
+    const objLeft =
+        obj.x;
+
+
+    const objRight =
+        obj.x +
+        obj.width;
+
+
+    const overBeam =
+        objRight > beamLeft &&
+        objLeft < beamRight;
+
+
+    const landing =
+        overBeam &&
+        previousBottom <= beam.y &&
+        currentBottom >= beam.y &&
+        obj.vy >= 0;
+
+
+    if (landing) {
+
+        obj.y =
+            beam.y -
+            obj.height;
+
+        obj.vy = 0;
+
+        obj.grounded = true;
+
+        return true;
+    }
+
+
+    obj.grounded = false;
+
+    return false;
+}
+
+
+/* =========================================================
+   WOODY AI
+========================================================= */
+
+function updateWoodyAI(dt) {
+
+    if (woody.fallen)
+        return;
+
+
+    woody.aiTimer += dt;
+
+
+    if (woody.hitTimer > 0) {
+
+        woody.hitTimer -= dt;
+
+    }
+
+
+    if (woody.fear === 0) {
+
+        woody.state = "walking";
+
+        woody.vx =
+            woody.facing * 90;
+
+
+        if (
+            woody.grounded &&
+            woody.aiTimer > 4.5
+        ) {
+
+            woody.aiTimer = 0;
+
+            woody.vy = -700;
+
+            woody.grounded = false;
+        }
+    }
+
+
+    else if (woody.fear === 1) {
+
+        woody.state = "scared";
+
+        woody.vx =
+            woody.facing * 140;
+
+
+        if (
+            woody.grounded &&
+            woody.aiTimer > 2.2
+        ) {
+
+            woody.aiTimer = 0;
+
+            woody.vy = -750;
+
+            woody.grounded = false;
+        }
+    }
+
+
+    else if (woody.fear === 2) {
+
+        woody.state = "fleeing";
+
+        woody.vx =
+            woody.facing * 190;
+
+
+        if (
+            woody.grounded &&
+            woody.aiTimer > 1.4
+        ) {
+
+            woody.aiTimer = 0;
+
+            woody.vy = -790;
+
+            woody.grounded = false;
+        }
+    }
+
+
+    else if (woody.fear >= 3) {
+
+        woody.state = "PANIC";
+
+        woody.vx =
+            woody.facing * 270;
+
+
+        if (
+            woody.grounded &&
+            woody.aiTimer > 0.45
+        ) {
+
+            woody.aiTimer = 0;
+
+            woody.vy = -1050;
+
+            woody.grounded = false;
+        }
+    }
+
+
+    woody.vx *= woody.speedScale;
+
+
+    const leftDistance =
+        woody.x - beam.x;
+
+
+    const rightDistance =
+        beam.x +
+        beam.width -
+        (woody.x + woody.width);
+
+
+    woody.edgeWarning = false;
+
+
+    if (
+        woody.beamCollision &&
+        woody.fear < 3 &&
+        woody.grounded
+    ) {
+
+        if (
+            woody.vx < 0 &&
+            leftDistance < 100
+        ) {
+
+            woody.edgeWarning = true;
+
+            woody.facing = 1;
+        }
+
+
+        if (
+            woody.vx > 0 &&
+            rightDistance < 100
+        ) {
+
+            woody.edgeWarning = true;
+
+            woody.facing = -1;
+        }
+    }
+}
+
+
+/* =========================================================
+   WOODY PHYSICS
+========================================================= */
+
+function updateWoody(dt) {
+
+    if (!woody.active) {
+        return;
+    }
+
+
+    if (woody.fallen) {
+
+        woody.vy +=
+            gravity * dt;
+
+        woody.x +=
+            woody.vx * dt;
+
+        woody.y +=
+            woody.vy * dt;
+
+        woody.fallTimer += dt;
+
+        return;
+    }
+
+
+    updateWoodyAI(dt);
+
+
+    woody.vy +=
+        gravity * dt;
+
+
+    woody.x +=
+        woody.vx * dt;
+
+
+    woody.y +=
+        woody.vy * dt;
+
+
+    checkBeamLanding(
+        woody,
+        dt
+    );
+
+
+    if (woody.x < 0) {
+
+        woody.x = 0;
+
+        woody.facing = 1;
+
+        woody.vx =
+            Math.abs(woody.vx);
+    }
+
+
+    if (
+        woody.x >
+        WORLD_WIDTH -
+        woody.width
+    ) {
+
+        woody.x =
+            WORLD_WIDTH -
+            woody.width;
+
+        woody.facing = -1;
+
+        woody.vx =
+            -Math.abs(woody.vx);
+    }
+
+
+    if (
+        woody.y >
+        water.y + 20
+    ) {
+
+        woody.fallen = true;
+
+        woody.fallTimer = 0;
+
+        woody.state = "fallen";
+    }
+
+
+    if (
+        woody.grounded &&
+        Math.abs(woody.vx) > 20
+    ) {
+
+        woody.animationTimer +=
+            dt * 10;
+
+
+        woody.walkFrame =
+            Math.floor(
+                woody.animationTimer
+            ) %
+            woodyWalkFrames.length;
+
+    } else {
+
+        woody.animationTimer = 0;
+
+        woody.walkFrame = 0;
+    }
+}
+
+
+/* =========================================================
+   ATTACK LOGIC (PC HITTING WOODY & BLOCKY)
+========================================================= */
+
+function touching(a, b) {
+    return (
+        a.x + a.width > b.x &&
+        a.x < b.x + b.width &&
+        a.y + a.height > b.y &&
+        a.y < b.y + b.height
+    );
+}
+
+
+function tryAttacks() {
+
+    /*
+       PC HITS WOODY
+    */
+
+    if (woody.active && !woody.fallen && woody.hitTimer <= 0 && touching(player, woody)) {
+
+        woody.hits++;
+
+        woody.fear = Math.min(3, woody.hits);
+
+        woody.hitTimer = 0.45;
+
+        woody.aiTimer = 0;
+
+
+        const pcCenter = player.x + player.width / 2;
+
+        const woodyCenter = woody.x + woody.width / 2;
+
+        const direction = pcCenter < woodyCenter ? 1 : -1;
+
+
+        woody.facing = direction;
+
+
+        if (woody.hits === 1) {
+
+            woody.vx = direction * 170;
+
+            woody.vy = -620;
+
+            woody.grounded = false;
+
+        } else if (woody.hits === 2) {
+
+            woody.vx = direction * 240;
+
+            woody.vy = -800;
+
+            woody.grounded = false;
+
+        } else if (woody.hits >= 3) {
+
+            woody.beamCollision = false;
+
+            woody.state = "PANIC";
+
+            woody.fear = 3;
+
+            woody.vx = direction * 420;
+
+            woody.vy = -1050;
+
+            woody.grounded = false;
+
+            woody.fallen = true;
+
+            woody.fallTimer = 0;
+
+        }
+
+        return;
+    }
+
+
+    /*
+       PC HITS BLOCKY (3-HIT FALL)
+    */
+
+    if (blocky.active && !blocky.fallen && blocky.hitTimer <= 0 && touching(player, blocky)) {
+
+        blocky.hits++;
+
+        blocky.hitTimer = 0.45;
+
+
+        const pcCenter = player.x + player.width / 2;
+
+        const blockyCenter = blocky.x + blocky.width / 2;
+
+        const direction = pcCenter < blockyCenter ? 1 : -1;
+
+
+        blocky.facing = -direction;
+
+
+        if (blocky.hits < 3) {
+
+            blocky.vx = direction * 320;
+
+            blocky.vy = -500;
+
+            blocky.grounded = false;
+
+        } else {
+
+            blocky.beamCollision = false;
+
+            blocky.vx = direction * 550;
+
+            blocky.vy = -850;
+
+            blocky.grounded = false;
+
+            blocky.fallen = true;
+
+            blocky.fallTimer = 0;
+
+        }
+
+    }
+
+}
+
+
+/* =========================================================
+   BLOCKY AI + PHYSICS
+========================================================= */
+
+function knockPCBack() {
+
+    if (playerFallen || player.knockbackCooldown > 0) {
+        return;
+    }
+
+    player.blockPushes++;
+    player.knockbackCooldown = 0.75;
+    player.pushing = true;
+    player.pushTimer = 0;
+
+    const direction =
+        (player.x + player.width / 2) >=
+        (blocky.x + blocky.width / 2) ? 1 : -1;
+
+    player.facing = direction;
+    player.vx = direction * 650;
+    player.vy = -330;
+    player.grounded = false;
+
+    blocky.attackTimer = 0.42;
+    blocky.attackCooldown = blocky.cooldownTime;
+
+    if (player.blockPushes >= 3) {
+        playerFallen = true;
+        playerFallTimer = 0;
+        player.pushing = false;
+        player.vx = direction * 720;
+        player.vy = -420;
+        player.grounded = false;
+    }
+}
+
+
+function knockWoodyBack() {
+
+    if (woody.fallen || !woody.active || blocky.attackCooldown > 0) {
+        return;
+    }
+
+    woody.blockHits++;
+
+    const direction =
+        (woody.x + woody.width / 2) >=
+        (blocky.x + blocky.width / 2) ? 1 : -1;
+
+    woody.facing = direction;
+
+    blocky.attackTimer = 0.42;
+    blocky.attackCooldown = blocky.cooldownTime;
+
+    if (woody.blockHits < 3) {
+
+        woody.vx = direction * 380;
+        woody.vy = -450;
+        woody.grounded = false;
+
+    } else {
+
+        woody.beamCollision = false;
+        woody.state = "PANIC";
+        woody.fear = 3;
+
+        woody.vx = direction * 500;
+        woody.vy = -950;
+        woody.grounded = false;
+
+        woody.fallen = true;
+        woody.fallTimer = 0;
+    }
+}
+
+
+function updateBlocky(dt) {
+
+    if (!blocky.active) {
+        return;
+    }
+
+    if (blocky.fallen) {
+        blocky.vy += gravity * dt;
+        blocky.x += blocky.vx * dt;
+        blocky.y += blocky.vy * dt;
+        blocky.fallTimer += dt;
+        return;
+    }
+
+    blocky.attackCooldown = Math.max(0, blocky.attackCooldown - dt);
+    blocky.attackTimer = Math.max(0, blocky.attackTimer - dt);
+
+    if (blocky.hitTimer > 0) {
+        blocky.hitTimer -= dt;
+    }
+
+    let target = player;
+    blocky.target = "player";
+
+    const woodyOut = woody.fallen || !woody.active;
+
+    if (!woodyOut && !playerFallen) {
+        const playerDistance = Math.abs(
+            (player.x + player.width / 2) -
+            (blocky.x + blocky.width / 2)
+        );
+
+        const woodyDistance = Math.abs(
+            (woody.x + woody.width / 2) -
+            (blocky.x + blocky.width / 2)
+        );
+
+        if (woodyDistance < playerDistance) {
+            target = woody;
+            blocky.target = "woody";
+        }
+    } else if (woodyOut && !playerFallen) {
+        target = player;
+        blocky.target = "player";
+    } else if (playerFallen && !woodyOut) {
+        target = woody;
+        blocky.target = "woody";
+    }
+
+    const dx =
+        (target.x + target.width / 2) -
+        (blocky.x + blocky.width / 2);
+
+    const dy = target.y - blocky.y;
+    const distance = Math.abs(dx);
+
+    if (distance > 58) {
+        blocky.facing = dx >= 0 ? 1 : -1;
+
+        const chaseSpeed = blocky.chaseSpeed;
+        blocky.vx = blocky.facing * chaseSpeed;
+
+        if (
+            blocky.grounded &&
+            (dy < -45 || distance > 300)
+        ) {
+            blocky.vy = -650;
+            blocky.grounded = false;
+        }
+    } else {
+        blocky.vx *= Math.max(0, 1 - dt * 10);
+
+        if (blocky.attackCooldown <= 0) {
+            if (target === player && !playerFallen) {
+                if (touching(blocky, player)) {
+                    knockPCBack();
+                }
+            } else if (target === woody && !woodyOut) {
+                if (touching(blocky, woody)) {
+                    knockWoodyBack();
+                }
+            }
+        }
+    }
+
+    blocky.vy += gravity * dt;
+    blocky.x += blocky.vx * dt;
+    blocky.y += blocky.vy * dt;
+
+    checkBeamLanding(blocky, dt);
+
+    if (blocky.y > water.y + 20) {
+        blocky.fallen = true;
+        blocky.fallTimer = 0;
+    }
+
+    if (
+        blocky.grounded &&
+        Math.abs(blocky.vx) > 20
+    ) {
+        blocky.animationTimer += dt * 10;
+        blocky.walkFrame =
+            Math.floor(blocky.animationTimer) %
+            blockyWalkFrames.length;
+    } else {
+        blocky.animationTimer = 0;
+        blocky.walkFrame = 0;
+    }
+}
+
+
+/* =========================================================
+   PC UPDATE
+========================================================= */
+
+function updatePC(dt) {
+
+    if (playerFallen) {
+
+        player.vy += gravity * dt;
+
+        player.x += player.vx * dt;
+        player.y += player.vy * dt;
+
+        playerFallTimer += dt;
+
+
+        if (
+            playerFallTimer > 1.5
+        ) {
+
+            resetLevel();
+        }
+
+        return;
+    }
+
+
+    /*
+       Knockback cooldown belongs to PC, so it counts down here
+       and keeps ticking even if Blocky has already fallen.
+    */
+
+    if (player.knockbackCooldown > 0) {
+
+        player.knockbackCooldown =
+            Math.max(
+                0,
+                player.knockbackCooldown - dt
+            );
+    }
+
+
+    let moving = false;
+
+
+    if (
+        keys["arrowleft"] ||
+        keys["q"]
+    ) {
+
+        player.vx -=
+            player.acceleration * dt;
+
+        player.facing = -1;
+
+        moving = true;
+    }
+
+
+    if (
+        keys["arrowright"] ||
+        keys["d"]
+    ) {
+
+        player.vx +=
+            player.acceleration * dt;
+
+        player.facing = 1;
+
+        moving = true;
+    }
+
+
+    if (!moving) {
+
+        if (player.vx > 0) {
+
+            player.vx -=
+                player.friction * dt;
+
+
+            if (player.vx < 0)
+                player.vx = 0;
+        }
+
+
+        if (player.vx < 0) {
+
+            player.vx +=
+                player.friction * dt;
+
+
+            if (player.vx > 0)
+                player.vx = 0;
+        }
+    }
+
+
+    if (player.knockbackCooldown <= 0) {
+        player.vx =
+            Math.max(
+                -player.speed,
+                Math.min(
+                    player.speed,
+                    player.vx
+                )
+            );
+    }
+
+
+    if (
+        jumpPressed &&
+        player.grounded
+    ) {
+
+        player.vy =
+            -player.jumpPower;
+
+        player.grounded = false;
+
+        player.jumpCount++;
+    }
+
+
+    jumpPressed = false;
+
+
+    player.pushing =
+        !!keys["a"];
+
+
+    if (!player.pushing) {
+
+        player.pushTimer = 0;
+    }
+
+
+    player.vy +=
+        gravity * dt;
+
+
+    player.x +=
+        player.vx * dt;
+
+
+    player.y +=
+        player.vy * dt;
+
+
+    checkBeamLanding(
+        player,
+        dt
+    );
+
+
+    if (player.x < 0) {
+
+        player.x = 0;
+
+        player.vx = 0;
+    }
+
+
+    if (
+        player.x >
+        WORLD_WIDTH -
+        player.width
+    ) {
+
+        player.x =
+            WORLD_WIDTH -
+            player.width;
+
+        player.vx = 0;
+    }
+
+
+    if (
+        player.y >
+        water.y + 20
+    ) {
+
+        playerFallen = true;
+
+        playerFallTimer = 0;
+    }
+
+
+    if (
+        moving &&
+        player.grounded
+    ) {
+
+        player.animationTimer +=
+            dt * 12;
+
+
+        player.walkFrame =
+            Math.floor(
+                player.animationTimer
+            ) %
+            pcWalkFrames.length;
+
+    } else {
+
+        player.animationTimer = 0;
+
+        player.walkFrame = 0;
+    }
+}
+
+
+/* =========================================================
+   RESET
+========================================================= */
+
+function resetLevel() {
+
+    player.x = currentLevel.playerX;
+
+    player.y =
+        beam.y -
+        player.height;
+
+    player.vx = 0;
+
+    player.vy = 0;
+
+    player.grounded = true;
+
+    player.facing = 1;
+
+    player.animationTimer = 0;
+
+    player.walkFrame = 0;
+
+    player.pushing = false;
+
+    player.pushTimer = 0;
+
+    player.blockPushes = 0;
+
+    player.knockbackCooldown = 0;
+
+
+    woody.x = currentLevel.woody.x;
+
+    woody.y =
+        beam.y -
+        woody.height;
+
+    woody.vx = 0;
+
+    woody.vy = 0;
+
+    woody.grounded = true;
+
+    woody.facing = -1;
+
+    woody.animationTimer = 0;
+
+    woody.walkFrame = 0;
+
+    woody.state = "walking";
+
+    woody.stateTimer = 0;
+
+    woody.aiTimer = 0;
+
+    woody.fear = 0;
+
+    woody.hits = 0;
+
+    woody.blockHits = 0;
+
+    woody.hitTimer = 0;
+
+    woody.fallen = false;
+
+    woody.fallTimer = 0;
+
+    woody.edgeWarning = false;
+
+    woody.beamCollision = true;
+
+
+    blocky.x = currentLevel.blocky.x;
+    blocky.y = beam.y - blocky.height;
+    blocky.vx = 0;
+    blocky.vy = 0;
+    blocky.grounded = true;
+    blocky.facing = -1;
+    blocky.animationTimer = 0;
+    blocky.walkFrame = 0;
+    blocky.hits = 0;
+    blocky.hitTimer = 0;
+    blocky.attackTimer = 0;
+    blocky.attackCooldown = 0;
+    blocky.target = "player";
+    blocky.fallen = false;
+    blocky.fallTimer = 0;
+    blocky.beamCollision = true;
+
+
+    /*
+       Per-level settings (see LEVELS).
+    */
+
+    woody.active = currentLevel.woody.enabled;
+
+    woody.speedScale = currentLevel.woody.speedScale;
+
+    blocky.active = currentLevel.blocky.enabled;
+
+    blocky.chaseSpeed = currentLevel.blocky.chaseSpeed;
+
+    blocky.cooldownTime = currentLevel.blocky.attackCooldown;
+
+
+    playerFallen = false;
+
+    playerFallTimer = 0;
+
+
+    if (inTutorial()) {
+
+        applyTutorialSetup();
+
+        tutorial.lastX = player.x;
+    }
+
+
+    cameraX = 0;
+}
+
+
+/* =========================================================
+   CAMERA
+========================================================= */
+
+function updateCamera() {
+
+    const target =
+        player.x -
+        canvas.width * 0.38;
+
+
+    cameraX +=
+        (target - cameraX) *
+        0.12;
+
+
+    cameraX =
+        Math.max(
+            0,
+            Math.min(
+                WORLD_WIDTH -
+                canvas.width,
+                cameraX
+            )
+        );
+}
+
+
+/* =========================================================
+   DRAW BACKGROUND
+========================================================= */
+
+function drawBackground() {
+
+    const img = levelImage("bg");
+
+
+    if (
+        !img ||
+        !img.complete ||
+        img.naturalWidth === 0
+    ) {
+
+        ctx.fillStyle = "#80c8ff";
+
+        ctx.fillRect(
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
+
+        return;
+    }
+
+
+    const width =
+        img.naturalWidth;
+
+
+    let start =
+        -(
+            (cameraX * 0.25) %
+            width
+        );
+
+
+    for (
+        let x = start;
+        x < canvas.width;
+        x += width
+    ) {
+
+        ctx.drawImage(
+
+            img,
+
+            Math.round(x),
+
+            0,
+
+            width,
+
+            canvas.height
+        );
+    }
+}
+
+
+/* =========================================================
+   DRAW WATER
+========================================================= */
+
+function drawWater() {
+
+    const img = levelImage("water");
+
+
+    if (
+        !img ||
+        !img.complete ||
+        img.naturalWidth === 0
+    ) {
+
+        ctx.fillStyle = "#2d9ed8";
+
+        ctx.fillRect(
+
+            -cameraX,
+
+            water.y,
+
+            water.width,
+
+            water.height
+        );
+
+        return;
+    }
+
+
+    const tileWidth =
+        img.naturalWidth;
+
+
+    const tileHeight =
+        img.naturalHeight;
+
+
+    for (
+        let x = water.x;
+        x < water.x + water.width;
+        x += tileWidth
+    ) {
+
+        ctx.drawImage(
+
+            img,
+
+            Math.round(
+                x - cameraX
+            ),
+
+            Math.round(water.y),
+
+            tileWidth,
+
+            tileHeight
+        );
+    }
+}
+
+
+/* =========================================================
+   DRAW BEAM
+========================================================= */
+
+function drawBeam() {
+
+    const img = levelImage("beam");
+
+
+    if (
+        !img ||
+        !img.complete ||
+        img.naturalWidth === 0
+    ) {
+
+        ctx.fillStyle = "#8b5a2b";
+
+        ctx.fillRect(
+
+            beam.x - cameraX,
+
+            beam.y,
+
+            beam.width,
+
+            beam.height
+        );
+
+        return;
+    }
+
+
+    const tileWidth =
+        img.naturalWidth;
+
+
+    const tileHeight =
+        img.naturalHeight;
+
+
+    for (
+        let x = beam.x;
+        x < beam.x + beam.width;
+        x += tileWidth
+    ) {
+
+        const remaining =
+            beam.x +
+            beam.width -
+            x;
+
+
+        const drawWidth =
+            Math.min(
+                tileWidth,
+                remaining
+            );
+
+
+        ctx.drawImage(
+
+            img,
+
+            0,
+            0,
+
+            drawWidth,
+            tileHeight,
+
+            Math.round(
+                x - cameraX
+            ),
+
+            Math.round(beam.y),
+
+            drawWidth,
+
+            beam.height
+        );
+    }
+}
+
+
+/* =========================================================
+   DRAW ENTITY
+========================================================= */
+
+function drawEntity(obj, img) {
+
+    if (
+        !img ||
+        !img.complete ||
+        img.naturalWidth === 0
+    ) {
+
+        return;
+    }
+
+
+    const drawX =
+        Math.round(
+            obj.x - cameraX
+        );
+
+
+    const drawY =
+        Math.round(obj.y);
+
+
+    ctx.save();
+
+
+    if (obj.facing === -1) {
+
+        ctx.translate(
+
+            drawX +
+            obj.width,
+
+            drawY
+        );
+
+
+        ctx.scale(-1, 1);
+
+
+        ctx.drawImage(
+
+            img,
+
+            0,
+            0,
+
+            obj.width,
+            obj.height
+        );
+
+    } else {
+
+        ctx.drawImage(
+
+            img,
+
+            drawX,
+            drawY,
+
+            obj.width,
+            obj.height
+        );
+    }
+
+
+    ctx.restore();
+}
+
+
+/* =========================================================
+   DRAW
+========================================================= */
+
+function draw() {
+
+    ctx.clearRect(
+
+        0,
+        0,
+        canvas.width,
+        canvas.height
+    );
+
+
+    drawBackground();
+
+    drawWater();
+
+    drawBeam();
+
+
+    if (gameState !== "levelSelect") {
+
+        drawWoody();
+
+        drawBlocky();
+
+        drawPC();
+    }
+
+
+    if (
+        gameState === "playing" &&
+        inTutorial()
+    ) {
+        drawTutorialText();
+    }
+
+
+    if (menu) {
+        drawMenu();
+    }
+}
+
+
+function drawWoody() {
+
+    if (!woody.active) {
+        return;
+    }
+
+    drawEntity(
+        woody,
+        getWoodySprite()
+    );
+}
+
+
+function drawBlocky() {
+
+    if (!blocky.active) {
+        return;
+    }
+
+    drawEntity(
+        blocky,
+        getBlockySprite()
+    );
+}
+
+
+function drawPC() {
+
+    drawEntity(
+        player,
+        getPCSprite()
+    );
+}
+
+
+/* =========================================================
+   LEVELS
+
+   Every level uses the same physics and the same characters.
+   To add a level, copy one entry below and change its numbers.
+
+   name             : shown in the level select (letters and spaces only)
+   beamX, beamWidth : where the beam starts and how long it is
+   worldWidth       : total scrolling width (beam end + room to fall)
+   playerX          : PC's starting x
+   woody.enabled    : false = Woody is not in this level
+   woody.x          : Woody's starting x
+   woody.speedScale : 1 = normal, 1.3 = 30% faster
+   blocky.enabled   : false = Blocky is not in this level
+   blocky.x         : Blocky's starting x
+   blocky.chaseSpeed     : Blocky's running speed (original = 190)
+   blocky.attackCooldown : seconds between Blocky's pushes (original = 0.85)
+   art (optional)   : { bg: "file.png", water: "file.png", beam: "file.png" }
+                      gives a level its own background / water / beam
+========================================================= */
+
+const LEVELS = [
+
+    {
+        name: "BALANCE BEAM",
+
+        beamX: 100,
+        beamWidth: 2800,
+        worldWidth: 5000,
+
+        playerX: 150,
+
+        woody: { enabled: true, x: 900, speedScale: 1 },
+
+        blocky: {
+            enabled: true,
+            x: 1450,
+            chaseSpeed: 190,
+            attackCooldown: 0.85
+        }
+    },
+
+    {
+        name: "LONG WALK",
+
+        beamX: 100,
+        beamWidth: 4400,
+        worldWidth: 6600,
+
+        playerX: 150,
+
+        woody: { enabled: true, x: 1500, speedScale: 1.15 },
+
+        blocky: {
+            enabled: true,
+            x: 2600,
+            chaseSpeed: 205,
+            attackCooldown: 0.8
+        }
+    },
+
+    {
+        name: "SHORT FUSE",
+
+        beamX: 100,
+        beamWidth: 1100,
+        worldWidth: 3300,
+
+        playerX: 200,
+
+        woody: { enabled: true, x: 650, speedScale: 1.3 },
+
+        blocky: {
+            enabled: true,
+            x: 950,
+            chaseSpeed: 220,
+            attackCooldown: 0.7
+        }
+    },
+
+    {
+        name: "ONE ON ONE",
+
+        beamX: 100,
+        beamWidth: 1800,
+        worldWidth: 3900,
+
+        playerX: 250,
+
+        woody: { enabled: false, x: 0, speedScale: 1 },
+
+        blocky: {
+            enabled: true,
+            x: 1500,
+            chaseSpeed: 215,
+            attackCooldown: 0.75
+        }
+    }
+];
+
+
+const TUTORIAL_INDEX = -1;
+
+const TUTORIAL_LEVEL = {
+
+    name: "TUTORIAL",
+
+    beamX: 100,
+    beamWidth: 2800,
+    worldWidth: 5000,
+
+    playerX: 150,
+
+    woody: { enabled: true, x: 700, speedScale: 1 },
+
+    blocky: {
+        enabled: false,
+        x: 1450,
+        chaseSpeed: 170,
+        attackCooldown: 1.0
+    }
+};
+
+
+/*
+   When every enemy in a level has fallen and PC is still standing,
+   the level is won. Set to false for a pure sandbox with no goal.
+*/
+
+const ENABLE_LEVEL_WIN = true;
+
+
+/* Load any custom level art listed in the levels above. */
+
+for (const level of [TUTORIAL_LEVEL, ...LEVELS]) {
+
+    if (!level.art) {
+        continue;
+    }
+
+    for (const file of Object.values(level.art)) {
+        loadImage("art:" + file, file);
+    }
+}
+
+
+let currentLevel = LEVELS[0];
+
+let currentLevelIndex = 0;
+
+
+/* "levelSelect", "playing", "paused" or "levelComplete" */
+
+let gameState = "levelSelect";
+
+let menu = null;
+
+let winTimer = 0;
+
+let lastSelectIndex = 0;
+
+
+function levelImage(name) {
+
+    const art = currentLevel && currentLevel.art;
+
+    if (art && art[name]) {
+
+        const custom = assets["art:" + art[name]];
+
+        if (
+            custom &&
+            custom.complete &&
+            custom.naturalWidth > 0
+        ) {
+            return custom;
+        }
+    }
+
+    return assets[name];
+}
+
+
+function applyLevelGeometry() {
+
+    beam.x = currentLevel.beamX;
+
+    beam.width = currentLevel.beamWidth;
+
+    WORLD_WIDTH = currentLevel.worldWidth;
+
+    water.width = WORLD_WIDTH;
+}
+
+
+function startLevel(index) {
+
+    currentLevelIndex = index;
+
+    currentLevel =
+        index === TUTORIAL_INDEX ?
+        TUTORIAL_LEVEL :
+        LEVELS[index];
+
+    /* The level select lists TUTORIAL first, then the levels. */
+
+    lastSelectIndex = index + 1;
+
+    applyLevelGeometry();
+
+    menu = null;
+
+    winTimer = 0;
+
+    jumpPressed = false;
+
+    aPressed = false;
+
+
+    if (index === TUTORIAL_INDEX) {
+
+        tutorial.step = 0;
+
+        tutorial.moved = 0;
+
+        tutorial.doneTimer = 0;
+    }
+
+
+    resetLevel();
+
+
+    if (index === TUTORIAL_INDEX) {
+        enterTutorialStep(0);
+    }
+
+    gameState = "playing";
+}
+
+
+/* =========================================================
+   TUTORIAL
+========================================================= */
+
+const TUTORIAL_KEY = "bfhlds_tutorial_done";
+
+let tutorialDoneThisSession = false;
+
+
+function isTutorialDone() {
+
+    if (tutorialDoneThisSession) {
+        return true;
+    }
+
+    try {
+        return localStorage.getItem(TUTORIAL_KEY) === "1";
+    } catch (error) {
+        return false;
+    }
+}
+
+
+function markTutorialDone() {
+
+    tutorialDoneThisSession = true;
+
+    try {
+        localStorage.setItem(TUTORIAL_KEY, "1");
+    } catch (error) {}
+}
+
+
+const tutorial = {
+
+    step: 0,
+
+    moved: 0,
+
+    lastX: 0,
+
+    doneTimer: 0,
+
+    jumpBase: 0
+};
+
+
+const TUTORIAL_STEPS = [
+
+    {
+        lines: [
+            "MOVE WITH THE ARROW KEYS",
+            "OR Q AND D"
+        ],
+        done: () => tutorial.moved >= 400
+    },
+
+    {
+        lines: [
+            "PRESS SPACE TO JUMP",
+            "JUMP A FEW TIMES"
+        ],
+        done: () => player.jumpCount - tutorial.jumpBase >= 3
+    },
+
+    {
+        lines: [
+            "WALK UP TO WOODY",
+            "AND PRESS A TO PUSH HIM"
+        ],
+        done: () => woody.hits >= 1
+    },
+
+    {
+        lines: [
+            "PUSH WOODY TWO MORE TIMES",
+            "TO KNOCK HIM OFF THE BEAM"
+        ],
+        done: () => woody.fallen
+    },
+
+    {
+        lines: [
+            "BLOCKY IS COMING",
+            "PUSH HIM AWAY WITH A"
+        ],
+        done: () => blocky.hits >= 1
+    }
+];
+
+
+function inTutorial() {
+
+    return currentLevelIndex === TUTORIAL_INDEX;
+}
+
+
+/* Woody is only in the first steps, Blocky only in the last one. */
+
+function applyTutorialSetup() {
+
+    woody.active = tutorial.step <= 3;
+
+    blocky.active = tutorial.step >= 4;
+}
+
+
+function enterTutorialStep(n) {
+
+    tutorial.step = n;
+
+    tutorial.doneTimer = 0;
+
+    tutorial.jumpBase = player.jumpCount;
+
+    tutorial.lastX = player.x;
+
+    applyTutorialSetup();
+
+
+    if (n === 4) {
+
+        const beamMiddle = beam.x + beam.width / 2;
+
+        const side = player.x < beamMiddle ? 1 : -1;
+
+        const minX = beam.x + 60;
+
+        const maxX = beam.x + beam.width - 60 - blocky.width;
+
+        blocky.x = Math.max(
+            minX,
+            Math.min(maxX, player.x + side * 650)
+        );
+
+        blocky.y = beam.y - blocky.height;
+        blocky.vx = 0;
+        blocky.vy = 0;
+        blocky.grounded = true;
+        blocky.facing = -side;
+        blocky.hits = 0;
+        blocky.hitTimer = 0;
+        blocky.attackTimer = 0;
+        blocky.attackCooldown = 1;
+        blocky.fallen = false;
+        blocky.fallTimer = 0;
+        blocky.beamCollision = true;
+    }
+}
+
+
+function updateTutorial(dt) {
+
+    if (!inTutorial()) {
+        return;
+    }
+
+
+    if (!playerFallen) {
+
+        tutorial.moved +=
+            Math.abs(player.x - tutorial.lastX);
+    }
+
+    tutorial.lastX = player.x;
+
+
+    const step = TUTORIAL_STEPS[tutorial.step];
+
+    if (step.done()) {
+
+        tutorial.doneTimer += dt;
+
+        if (tutorial.doneTimer >= 0.9) {
+            advanceTutorial();
+        }
+
+    } else {
+
+        tutorial.doneTimer = 0;
+    }
+}
+
+
+function advanceTutorial() {
+
+    if (tutorial.step + 1 >= TUTORIAL_STEPS.length) {
+        finishTutorial();
+        return;
+    }
+
+    enterTutorialStep(tutorial.step + 1);
+}
+
+
+function finishTutorial() {
+
+    markTutorialDone();
+
+    openMenu(
+
+        "levelComplete",
+
+        "WELL DONE",
+
+        ["PRESS ZERO ANY TIME TO PAUSE"],
+
+        [
+            {
+                label: "PLAY",
+                action: () => startLevel(0)
+            },
+            {
+                label: "REPLAY TUTORIAL",
+                action: () => startLevel(TUTORIAL_INDEX)
+            },
+            {
+                label: "LEVEL SELECT",
+                action: openLevelSelect
+            }
+        ]
+    );
+}
+
+
+function drawTutorialText() {
+
+    const step = TUTORIAL_STEPS[tutorial.step];
+
+    if (!step) {
+        return;
+    }
+
+
+    const lines =
+        tutorial.doneTimer > 0 ?
+        ["NICE"] :
+        step.lines;
+
+    const lineHeight = textHeight(false) + 10;
+
+    const panelHeight = lines.length * lineHeight + 18;
+
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.55)";
+
+    ctx.fillRect(
+        40,
+        14,
+        canvas.width - 80,
+        panelHeight
+    );
+
+
+    let y = 26;
+
+    for (const line of lines) {
+
+        drawFontText(
+            line,
+            canvas.width / 2,
+            y,
+            {
+                align: "center",
+                maxWidth: canvas.width - 120
+            }
+        );
+
+        y += lineHeight;
+    }
+}
+
+
+/* =========================================================
+   LEVEL WIN
+========================================================= */
+
+function checkLevelWin(dt) {
+
+    if (
+        !ENABLE_LEVEL_WIN ||
+        inTutorial()
+    ) {
+        return;
+    }
+
+
+    const woodyGone = !woody.active || woody.fallen;
+
+    const blockyGone = !blocky.active || blocky.fallen;
+
+
+    if (
+        !playerFallen &&
+        woodyGone &&
+        blockyGone
+    ) {
+
+        winTimer += dt;
+
+        if (winTimer >= 1.6) {
+            completeLevel();
+        }
+
+    } else {
+
+        winTimer = 0;
+    }
+}
+
+
+function completeLevel() {
+
+    const items = [];
+
+    if (currentLevelIndex + 1 < LEVELS.length) {
+
+        const next = currentLevelIndex + 1;
+
+        items.push({
+            label: "NEXT LEVEL",
+            action: () => startLevel(next)
+        });
+    }
+
+    const again = currentLevelIndex;
+
+    items.push({
+        label: "PLAY AGAIN",
+        action: () => startLevel(again)
+    });
+
+    items.push({
+        label: "LEVEL SELECT",
+        action: openLevelSelect
+    });
+
+    openMenu("levelComplete", "YOU WIN", [], items);
+}
+
+
+/* =========================================================
+   MENUS (LEVEL SELECT, PAUSE, LEVEL COMPLETE)
+========================================================= */
+
+function openMenu(state, title, lines, items) {
+
+    gameState = state;
+
+    menu = {
+        title: title,
+        lines: lines,
+        items: items,
+        index: 0
+    };
+}
+
+
+function openLevelSelect() {
+
+    const items = [{
+        label: "TUTORIAL",
+        action: () => startLevel(TUTORIAL_INDEX)
+    }];
+
+    LEVELS.forEach((level, i) => {
+
+        items.push({
+            label: level.name,
+            action: () => startLevel(i)
+        });
+    });
+
+    openMenu("levelSelect", "SELECT LEVEL", [], items);
+
+    menu.index = Math.min(lastSelectIndex, items.length - 1);
+
+    cameraX = 0;
+}
+
+
+function openPauseMenu() {
+
+    const items = [
+
+        {
+            label: "RESUME",
+            action: resumeGame
+        },
+
+        {
+            label: "RESTART",
+            action: () => startLevel(currentLevelIndex)
+        }
+    ];
+
+    if (inTutorial()) {
+
+        items.push({
+            label: "SKIP TUTORIAL",
+            action: () => {
+                markTutorialDone();
+                openLevelSelect();
+            }
+        });
+    }
+
+    items.push({
+        label: "LEVEL SELECT",
+        action: openLevelSelect
+    });
+
+    openMenu("paused", "PAUSED", [], items);
+}
+
+
+function resumeGame() {
+
+    menu = null;
+
+    gameState = "playing";
+
+    jumpPressed = false;
+
+    aPressed = false;
+}
+
+
+function togglePause() {
+
+    if (gameState === "playing") {
+        openPauseMenu();
+    } else if (gameState === "paused") {
+        resumeGame();
+    }
+}
+
+
+function handleMenuKey(key) {
+
+    if (!menu) {
+        return;
+    }
+
+    const count = menu.items.length;
+
+    if (
+        key === "arrowup" ||
+        key === "z" ||
+        key === "w"
+    ) {
+
+        menu.index = (menu.index - 1 + count) % count;
+
+    } else if (
+        key === "arrowdown" ||
+        key === "s"
+    ) {
+
+        menu.index = (menu.index + 1) % count;
+
+    } else if (
+        key === "enter" ||
+        key === " "
+    ) {
+
+        menu.items[menu.index].action();
+    }
+}
+
+
+function drawMenu() {
+
+    ctx.fillStyle =
+        gameState === "levelSelect" ?
+        "rgba(0, 0, 0, 0.35)" :
+        "rgba(0, 0, 0, 0.6)";
+
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+
+    const centerX = canvas.width / 2;
+
+    let y = 50;
+
+
+    const title = drawFontText(
+        menu.title,
+        centerX,
+        y,
+        {
+            big: true,
+            align: "center",
+            maxWidth: canvas.width - 100
+        }
+    );
+
+    y += title.height + 24;
+
+
+    for (const line of menu.lines) {
+
+        const drawn = drawFontText(
+            line,
+            centerX,
+            y,
+            {
+                align: "center",
+                maxWidth: canvas.width - 100
+            }
+        );
+
+        y += drawn.height + 12;
+    }
+
+    if (menu.lines.length > 0) {
+        y += 14;
+    }
+
+
+    const count = menu.items.length;
+
+    const itemHeight = Math.min(
+        textHeight(false) + 22,
+        (canvas.height - 24 - y) / count
+    );
+
+
+    for (let i = 0; i < count; i++) {
+
+        const item = menu.items[i];
+
+        const itemY = y + i * itemHeight;
+
+
+        if (i === menu.index) {
+
+            const width = measureText(
+                item.label.toUpperCase(),
+                false,
+                FONT_SCALE_SMALL
+            );
+
+            ctx.fillStyle = "rgba(255, 220, 80, 0.35)";
+
+            ctx.fillRect(
+                centerX - width / 2 - 28,
+                itemY - 6,
+                width + 56,
+                itemHeight - 4
+            );
+
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
+
+            ctx.lineWidth = 2;
+
+            ctx.strokeRect(
+                centerX - width / 2 - 28,
+                itemY - 6,
+                width + 56,
+                itemHeight - 4
+            );
+        }
+
+
+        drawFontText(
+            item.label,
+            centerX,
+            itemY,
+            {
+                align: "center",
+                maxWidth: canvas.width - 140
+            }
+        );
+    }
+}
+
+
+/* =========================================================
+   GAME LOOP
+========================================================= */
+
+let lastTime =
+    performance.now();
+
+
+function gameLoop(timestamp) {
+
+    let dt =
+        (timestamp - lastTime) /
+        1000;
+
+
+    lastTime =
+        timestamp;
+
+
+    dt =
+        Math.min(
+            dt,
+            0.033
+        );
+
+
+    if (gameState === "playing") {
+
+        updatePC(dt);
+
+        updateWoody(dt);
+
+        updateBlocky(dt);
+
+
+        if (aPressed) {
+
+            tryAttacks();
+
+            aPressed = false;
+        }
+
+
+        updateTutorial(dt);
+
+        checkLevelWin(dt);
+
+
+        updateCamera();
+    }
+
+
+    draw();
+
+
+    requestAnimationFrame(
+        gameLoop
+    );
+}
+
+
+/* =========================================================
+   START
+========================================================= */
+
+if (isTutorialDone()) {
+
+    applyLevelGeometry();
+
+    openLevelSelect();
+
+} else {
+
+    startLevel(TUTORIAL_INDEX);
+}
+
+requestAnimationFrame(
+    gameLoop
+);
+
+</script>
+
+</body>
+</html>
